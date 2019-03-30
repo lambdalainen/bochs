@@ -1,0 +1,151 @@
+###############################################################
+#           bochsrc.txt file for Windows XP SP3
+###############################################################
+
+# CPU
+#
+# TODO: IPS is used to calibrate many time-dependent events within the Bochs
+# simulation. This is the number of IPS that Bochs is capable of running on
+# your machine. You can recompile Bochs with --enable-show-ips option enabled,
+# to find your workstation's capability. Measured IPS value will then be logged
+# into your log file or in the status bar (if supported by the gui).
+cpu: model=core_duo_t2400_yonah, count=1, ips=50000000, reset_on_triple_fault=1, ignore_bad_msrs=1, msrs="msrs.def"
+cpu: cpuid_limit_winnt=0
+
+# Clock
+#
+# TODO: This defines the method how to synchronize the Bochs internal time with
+# realtime. With the value 'none' the Bochs time relies on the IPS value and no
+# host time synchronization is used. The 'slowdown' method sacrifices
+# performance to preserve reproducibility while allowing host time correlation.
+# The 'realtime' method sacrifices reproducibility to preserve performance and
+# host-time correlation. It is possible to enable 'both' synchronization methods.
+#
+# clock: sync=none, rtc_sync=0, time0=local
+
+# Memory
+#
+# It is possible to allocate less memory than you want to emulate in guest
+# system. This will fake guest to see the non-existing memory. Once guest
+# system touches new memory block it will be dynamically taken from the memory
+# pool. You will be warned (by FATAL PANIC) in case guest already used all
+# allocated host memory and wants more.
+#
+# TODO: Due to limitations in the host OS, Bochs fails to allocate more than
+# 1024MB on most 32-bit systems. In order to overcome this problem configure
+# and build Bochs with --enable-large-ramfile option.
+#
+# There's also a 'megs' option which sets the 'guest' and 'host' memory
+# parameters to the same value. In all other cases the 'memory' option should
+# be used instead.
+memory: guest=4096, host=2048
+
+# ROM and VGA ROM
+romimage: file=$BXSHARE/BIOS-bochs-latest, options=fastboot
+vgaromimage: file=$BXSHARE/VGABIOS-lgpl-latest
+
+# Keyboard
+#
+# Enable key mapping, using US layout as default
+#
+# keyboard: keymap=$BXSHARE/keymaps/x11-pc-us.map
+
+# Mouse
+#
+# TODO: The Bochs gui creates mouse "events" unless the 'enabled' option is set
+# to 0. The hardware emulation itself is not disabled by this. Unless you have
+# a particular reason for enabling the mouse by default, it is recommended that
+# you leave it off. You can also toggle the mouse usage at runtime (see
+# headerbar and the 'toggle' option below).
+mouse: enabled=0
+
+# PCI
+#
+# You can also specify the devices connected to PCI slots. Up to 5 slots are
+# available. For these combined PCI/ISA devices assigning to slot is mandatory:
+# cirrus, ne2k and pcivga. These PCI-only devices are auto-assigned if you
+# don't use the slot configuration: e1000, es1370, pcidev, pcipnic, usb_ohci,
+# usb_ehci and usb_xhci.
+pci: enabled=1, chipset=i440fx
+
+# GUI
+#
+# Requests that the GUI creates and uses its own non-shared colormap. If not
+# enabled, a shared colormap scheme may be used. 
+private_colormap: enabled=0
+
+# ATA
+#
+# If two devices are attached to a single cable, one must be designated as
+# device 0 (commonly referred to as master) and the other as device 1 (slave).
+# This distinction is necessary to allow both drives to share the cable without
+# conflict. The master drive is the drive that usually appears "first" to the
+# computer's BIOS and/or operating system. 
+ata0: enabled=1, ioaddr1=0x1f0, ioaddr2=0x3f0, irq=14
+ata0-master: type=disk, mode=flat, path="winxp_sp3.img"
+ata0-slave: type=cdrom, path="winxp_sp3.iso", status=inserted
+
+# Boot
+boot: cdrom
+
+# Log messages
+log: bochsout.txt
+
+# %t : 11 decimal digits timer tick
+# %i : 8 hexadecimal digits of current cpu eip (ignored in SMP configuration)
+# %e : 1 character event type ('i'nfo, 'd'ebug, 'p'anic, 'e'rror)
+# %d : 5 characters string of the device, between brackets
+logprefix: %t-%e-@%i-%d
+  
+# debug/info/error/panic
+panic: action=ask
+error: action=report
+info: action=report
+debug: action=ignore, pci=report # report BX_DEBUG from module 'pci'
+
+debugger_log: debugger.out
+
+# Serial ports (COMs) and parallel (printer) ports skipped
+
+# Sound skipped
+
+# Speaker skipped (for beeping)
+
+# Network
+#
+# http://bochs.sourceforge.net/doc/docbook/user/dlxlinux-networking.html
+#
+# ne2k: NE2000 compatible ethernet adapter
+#
+# IOADDR, IRQ: You probably won't need to change ioaddr and irq, unless there
+# are IRQ conflicts. These arguments are ignored when assign the ne2k to a
+# PCI slot.
+#
+# MAC: The MAC address MUST NOT match the address of any machine on the net.
+# Also, the first byte must be an even number (bit 0 set means a multicast
+# address), and you cannot use ff:ff:ff:ff:ff:ff because that's the broadcast
+# address.  For the ethertap module, you must use fe:fd:00:00:00:01.  There may
+# be other restrictions too.  To be safe, just use the b0:c4... address.
+#
+# ETHDEV: The ethdev value is the name of the network interface on your host
+# platform.  On UNIX machines, you can get the name by running ifconfig.  On
+# Windows machines, you must run niclist to get the name of the ethdev.
+# Niclist source code is in misc/niclist.c and it is included in Windows 
+# binary releases.
+#
+# If you don't want to make connections to any physical networks,
+# you can use the following 'ethmod's to simulate a virtual network:
+# null, vde, vnet, socket (not what we want, but good to know that we can
+# exclude them)
+#=======================================================================
+ne2k: ioaddr=0x300, irq=9, mac=b0:c4:20:00:00:00, ethmod=linux, ethdev=wlx1831bf59fa6f
+# ne2k: ioaddr=0x300, irq=9, mac=b0:c4:20:00:00:01, ethmod=win32, ethdev=MYCARD
+# ne2k: ioaddr=0x300, irq=9, mac=fe:fd:00:00:00:01, ethmod=tap, ethdev=tap0
+# ne2k: ioaddr=0x300, irq=9, mac=fe:fd:00:00:00:01, ethmod=tuntap, ethdev=/dev/net/tun0, script=./tunconfig
+
+# USB controllers skipped
+#
+# usb_uhci: This option controls the presence of the USB root hub which is a
+# part of the i440FX PCI chipset. If you connect the mouse or tablet to one of
+# the ports, Bochs forwards the mouse movement data to the USB device instead
+# of the selected mouse type. 
