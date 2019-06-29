@@ -1,0 +1,3 @@
+./configure --enable-e1000 CXXFLAGS="-mno-ms-bitfields -Wno-narrowing -static-libgcc -static-libstdc++"
+
+'--enable-debugger --enable-disasm' is simply too slow. We have to solve this in some other ways.
