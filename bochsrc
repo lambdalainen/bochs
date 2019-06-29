@@ -38,11 +38,11 @@ cpu: cpuid_limit_winnt=0
 # There's also a 'megs' option which sets the 'guest' and 'host' memory
 # parameters to the same value. In all other cases the 'memory' option should
 # be used instead.
-memory: guest=4096, host=2048
+memory: guest=1024, host=1024
 
 # ROM and VGA ROM
-romimage: file=$BXSHARE/BIOS-bochs-latest, options=fastboot
-vgaromimage: file=$BXSHARE/VGABIOS-lgpl-latest
+romimage: file=bios/BIOS-bochs-latest, options=fastboot
+vgaromimage: file=bios/VGABIOS-lgpl-latest
 
 # Keyboard
 #
@@ -138,7 +138,7 @@ debugger_log: debugger.out
 # null, vde, vnet, socket (not what we want, but good to know that we can
 # exclude them)
 #=======================================================================
-ne2k: ioaddr=0x300, irq=9, mac=b0:c4:20:00:00:00, ethmod=linux, ethdev=wlx1831bf59fa6f
+ne2k: ioaddr=0x300, irq=10, mac=b0:c4:20:00:00:00, ethmod=linux, ethdev=wlx1831bf59fa6f
 # ne2k: ioaddr=0x300, irq=9, mac=b0:c4:20:00:00:01, ethmod=win32, ethdev=MYCARD
 # ne2k: ioaddr=0x300, irq=9, mac=fe:fd:00:00:00:01, ethmod=tap, ethdev=tap0
 # ne2k: ioaddr=0x300, irq=9, mac=fe:fd:00:00:00:01, ethmod=tuntap, ethdev=/dev/net/tun0, script=./tunconfig
