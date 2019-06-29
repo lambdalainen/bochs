@@ -4872,7 +4872,7 @@ public: // for now...
   BX_SMF void    deliver_SIPI(unsigned vector);
   BX_SMF void    debug(bx_address offset);
 #if BX_DISASM
-  BX_SMF void    debug_disasm_instruction(bx_address offset);
+  BX_SMF void    debug_disasm_instruction(bx_address offset, bx_bool print_to_console);
 #endif
 
 #if BX_X86_DEBUGGER

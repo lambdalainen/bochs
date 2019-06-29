@@ -29,7 +29,7 @@
 
 #include "disasm/disasm.h"
 
-void BX_CPU_C::debug_disasm_instruction(bx_address offset)
+void BX_CPU_C::debug_disasm_instruction(bx_address offset, bx_bool print_to_console)
 {
 #if BX_DEBUGGER
   bx_dbg_disassemble_current(BX_CPU_ID, 1); // only one cpu, print time stamp
@@ -62,13 +62,19 @@ void BX_CPU_C::debug_disasm_instruction(bx_address offset)
       }
       char_buf[i] = 0;
       BX_INFO(("0x" FMT_ADDRX ">> %s", offset, char_buf));
+	  if (print_to_console)
+		printf("0x" FMT_ADDRX ">> %s\n", offset, char_buf);
     }
     else {
       BX_INFO(("0x" FMT_ADDRX ": (instruction unavailable) page split instruction", offset));
+	  if (print_to_console)
+		printf("0x" FMT_ADDRX ": (instruction unavailable) page split instruction\n", offset);
     }
   }
   else {
     BX_INFO(("0x" FMT_ADDRX ": (instruction unavailable) page not present", offset));
+	if (print_to_console)
+	  printf("0x" FMT_ADDRX ": (instruction unavailable) page not present\n", offset);
   }
 #endif  // #if BX_DEBUGGER
 }
@@ -269,7 +275,7 @@ void BX_CPU_C::debug(bx_address offset)
   }
 
 #if BX_DISASM
-  debug_disasm_instruction(offset);
+  debug_disasm_instruction(offset, 0);
 #endif  // #if BX_DISASM
 }
 

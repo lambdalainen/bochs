@@ -26,6 +26,162 @@
 
 #include "cpustats.h"
 
+#include "disasm/disasm.h"
+
+Bit64u rip_trace[10000];
+long   rip_idx;
+int    skip = 0;
+int    step = 0;
+int    instr_count = 0;
+
+bx_address yifan_breakpoint[4];
+bx_address yifan_watch_byte[4];
+bx_address yifan_watch_dword[4];
+bx_bool    yifan_trace = 0;
+bx_bool    yifan_break = 0;
+Bit32u     yifan_reg_target = 0xdeadbeee;
+Bit32u     yifan_final_int = 20200116;
+
+static disassembler bx_disassemble;
+static Bit8u        bx_disasm_ibuf[32];
+static char         bx_disasm_tbuf[512];
+
+bx_bool bx_dbg_read_linear(unsigned which_cpu, bx_address laddr, unsigned len, Bit8u *buf)
+{
+  unsigned remainsInPage;
+  bx_phy_address paddr;
+  unsigned read_len;
+  bx_bool paddr_valid;
+
+next_page:
+  remainsInPage = 0x1000 - PAGE_OFFSET(laddr);
+  read_len = (remainsInPage < len) ? remainsInPage : len;
+
+  paddr_valid = BX_CPU(which_cpu)->dbg_xlate_linear2phy(laddr, &paddr);
+  if (paddr_valid) {
+    if (! BX_MEM(0)->dbg_fetch_mem(BX_CPU(which_cpu), paddr, read_len, buf)) {
+      printf("bx_dbg_read_linear: physical memory read error (phy=0x" FMT_PHY_ADDRX ", lin=0x" FMT_ADDRX ")\n", paddr, laddr);
+      return 0;
+    }
+  }
+  else {
+    printf("bx_dbg_read_linear: physical address not available for linear 0x" FMT_ADDRX "\n", laddr);
+    return 0;
+  }
+
+  /* check for access across multiple pages */
+  if (remainsInPage < len)
+  {
+    laddr += read_len;
+    len -= read_len;
+    buf += read_len;
+    goto next_page;
+  }
+
+  return 1;
+}
+
+void bx_dbg_disassemble_command(const char *format, Bit64u from, Bit64u to)
+{
+  int numlines = INT_MAX;
+  int dbg_cpu = 0;
+
+  if (from > to) {
+     Bit64u temp = from;
+     from = to;
+     to = temp;
+  }
+
+  if (format) {
+    // format always begins with '/' (checked in lexer)
+    // so we won't bother checking it here second time.
+    numlines = atoi(format + 1);
+    if (to == from)
+      to = BX_MAX_BIT64U; // Disassemble just X lines
+  }
+
+  unsigned dis_size = 0; //bx_debugger.disassemble_size;
+  if (dis_size == 0) {
+    dis_size = 16; 		// until otherwise proven
+    if (BX_CPU(dbg_cpu)->sregs[BX_SEG_REG_CS].cache.u.segment.d_b)
+      dis_size = 32;
+    if (BX_CPU(dbg_cpu)->get_cpu_mode() == BX_MODE_LONG_64)
+      dis_size = 64;
+  }
+  
+  FILE *fp = fopen("disassembled.txt", "a");
+  fprintf(fp, ">>>>>>>>>> Starting new disassembly\n");
+
+  do {
+    numlines--;
+
+    if (! bx_dbg_read_linear(dbg_cpu, from, 16, bx_disasm_ibuf)) break;
+
+    unsigned ilen = bx_disassemble.disasm(dis_size==32, dis_size==64,
+       (bx_address)(-1), (bx_address)(-1), bx_disasm_ibuf, bx_disasm_tbuf);
+
+    fprintf(fp, "%08x: ", (unsigned) from);
+    fprintf(fp, "%-25s ; ", bx_disasm_tbuf);
+
+    for (unsigned j=0; j<ilen; j++)
+      fprintf(fp, "%02x", (unsigned) bx_disasm_ibuf[j]);
+    fprintf(fp, "\n");
+
+    from += ilen;
+  } while ((from < to) && numlines > 0);
+  
+  fprintf(fp, "<<<<<<<<<<  Disassembly ends\n");
+  
+  fclose(fp);
+}
+
+// format = "/1234"
+void bx_dbg_examine_command(const char *format, bx_address addr)
+{
+  int      dbg_cpu = 0;
+  unsigned repeat_count, i;
+  char     ch;
+  unsigned data_size = 1;
+  Bit8u    data8;
+  unsigned columns, per_line = 8, offset = 0;
+  Bit8u    databuf[8];
+
+  printf("[bochs]:\n");
+
+  format++;
+  repeat_count = 0;
+  ch = *format;
+
+  while (ch>='0' && ch<='9') {
+	repeat_count = 10*repeat_count + (ch-'0');
+	format++;
+    ch = *format;
+  }
+
+  columns = per_line + 1; // set current number columns past limit
+
+  for (i = 1; i <= repeat_count; i++) {
+    if (columns > per_line) {
+      // if not 1st run, need a newline from last line
+      if (i!=1)
+        printf("\n");
+      printf("0x" FMT_ADDRX " <bogus+%8u>:", addr, offset);
+      columns = 1;
+    }
+
+    if (! bx_dbg_read_linear(dbg_cpu, addr, data_size, databuf))
+		return;
+
+	data8 = databuf[0];
+	printf("\t0x%02x", (unsigned) data8);
+
+    addr += data_size;
+    columns++;
+    offset += data_size;
+  }
+  printf("\n");
+}
+
 void BX_CPU_C::cpu_loop(void)
 {
 #if BX_DEBUGGER
@@ -81,7 +237,6 @@ void BX_CPU_C::cpu_loop(void)
       RIP += i->ilen();
       // when handlers chaining is enabled this single call will execute entire trace
       BX_CPU_CALL_METHOD(i->execute1, (i)); // might iterate repeat instruction
-
       BX_SYNC_TIME_IF_SINGLE_PROCESSOR(0);
 
       if (BX_CPU_THIS_PTR async_event) break;
@@ -96,13 +251,333 @@ void BX_CPU_C::cpu_loop(void)
 
 #if BX_DEBUGGER
       if (BX_CPU_THIS_PTR trace)
-        debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip);
+        debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 0);
+#endif
+
+#if 0
+	  rip_trace[rip_idx++] = BX_CPU_THIS_PTR prev_rip;
+	  if (rip_idx == 10000)
+		  rip_idx = 0;
 #endif
 
       // want to allow changing of the instruction inside instrumentation callback
       BX_INSTR_BEFORE_EXECUTION(BX_CPU_ID, i);
       RIP += i->ilen();
       BX_CPU_CALL_METHOD(i->execute1, (i)); // might iterate repeat instruction
+	  
+#if 0
+	  if (EAX == 0x1343AB4 ||
+	  	  EBX == 0x1343AB4 ||
+	  	  ECX == 0x1343AB4 ||
+	  	  EDX == 0x1343AB4) {
+		if (skip == 1) {
+			printf("### skipping...\n");
+		} else {
+			  // We know these are not used
+			  //ESI == 0x1343B23 ||
+			  //EDI == 0x1343B23) {
+			debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 1);
+			printf("### After RIP %08x:\n", BX_CPU_THIS_PTR prev_rip);
+			printf("| EAX=%08x  EBX=%08x  ECX=%08x  EDX=%08x\n", (unsigned) EAX, (unsigned) EBX, (unsigned) ECX, (unsigned) EDX);
+			printf("| ESP=%08x  EBP=%08x  ESI=%08x  EDI=%08x\n", (unsigned) ESP, (unsigned) EBP, (unsigned) ESI, (unsigned) EDI);
+
+			char buf[8];
+			printf("Disassemble rip_trace? [y/n/s(kip)] ");
+			scanf("%s", buf);
+			if (buf[0] == 'y') {
+				printf("--- rip_idx: %li\n", rip_idx);
+				for (int idx = rip_idx; idx < 10000; idx++) {
+					bx_dbg_disassemble_command(NULL, rip_trace[idx], rip_trace[idx]);
+				}
+				for (int idx = 0; idx < rip_idx; idx++) {
+					bx_dbg_disassemble_command(NULL, rip_trace[idx], rip_trace[idx]);
+				}
+			} else if (buf[0] == 's') {
+				skip = 1;
+			}
+		}
+	  } else {
+		  skip = 0;
+	  }
+#endif
+
+#if 1
+	  if (EAX == yifan_reg_target ||
+	  	  EBX == yifan_reg_target ||
+	  	  ECX == yifan_reg_target ||
+	  	  EDX == yifan_reg_target ||
+		  ESI == yifan_reg_target ||
+		  EDI == yifan_reg_target) {
+		debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 1);
+		printf("### Got %x: after RIP %08x:\n", yifan_reg_target, BX_CPU_THIS_PTR prev_rip);
+		printf("| EAX=%08x  EBX=%08x  ECX=%08x  EDX=%08x\n", (unsigned) EAX, (unsigned) EBX, (unsigned) ECX, (unsigned) EDX);
+		printf("| ESP=%08x  EBP=%08x  ESI=%08x  EDI=%08x\n", (unsigned) ESP, (unsigned) EBP, (unsigned) ESI, (unsigned) EDI);
+	  }
+#endif
+
+#if 0
+	  if (BX_CPU_THIS_PTR prev_rip == 0x10010cca)
+		  step = 1;
+	  if (step) {
+		debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 1);
+		printf("### After RIP %08x:\n", BX_CPU_THIS_PTR prev_rip);
+		printf("| EAX=%08x  EBX=%08x  ECX=%08x  EDX=%08x\n", (unsigned) EAX, (unsigned) EBX, (unsigned) ECX, (unsigned) EDX);
+		printf("| ESP=%08x  EBP=%08x  ESI=%08x  EDI=%08x\n", (unsigned) ESP, (unsigned) EBP, (unsigned) ESI, (unsigned) EDI);
+		
+		if (EAX == 0x1343AB4 ||
+	  	    EBX == 0x1343AB4 ||
+	  	    ECX == 0x1343AB4 ||
+	  	    EDX == 0x1343AB4) {
+		  printf(">>>>>> Found target value\n");
+		}
+
+		char buf[8];
+		printf("Next or continue? [n/c] ");
+		scanf("%s", buf);
+		if (buf[0] == 'c')
+			step = 0;
+	  }
+#endif
+
+#if 0
+	  if (BX_CPU_THIS_PTR prev_rip == 0x10010cca) {
+		printf("### Start tracing 256 instructions\n");
+		instr_count = 256;
+	  }
+	  if (instr_count) {
+		instr_count--;
+		debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 0);
+		BX_INFO(("### After RIP %08x:", BX_CPU_THIS_PTR prev_rip));
+		BX_INFO(("| EAX=%08x  EBX=%08x  ECX=%08x  EDX=%08x", (unsigned) EAX, (unsigned) EBX, (unsigned) ECX, (unsigned) EDX));
+		BX_INFO(("| ESP=%08x  EBP=%08x  ESI=%08x  EDI=%08x", (unsigned) ESP, (unsigned) EBP, (unsigned) ESI, (unsigned) EDI));
+		
+		if (EAX == 0x1343AB4 ||
+	  	    EBX == 0x1343AB4 ||
+	  	    ECX == 0x1343AB4 ||
+	  	    EDX == 0x1343AB4) {
+		  BX_INFO((">>>>>> Found target value"));
+		}
+	  }
+#endif
+
+#if 1
+	  if ((BX_CPU_THIS_PTR prev_rip == 0x10010e5f && EBX == yifan_final_int) || step) {
+		debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 1);
+		printf("### After RIP %08x:\n", BX_CPU_THIS_PTR prev_rip);
+		printf("| EAX=%08x  EBX=%08x  ECX=%08x  EDX=%08x\n", (unsigned) EAX, (unsigned) EBX, (unsigned) ECX, (unsigned) EDX);
+		printf("| ESP=%08x  EBP=%08x  ESI=%08x  EDI=%08x\n", (unsigned) ESP, (unsigned) EBP, (unsigned) ESI, (unsigned) EDI);
+		
+#if 1
+		while (1) {
+			char buf[16];
+			printf("Next or continue or examine or set breakpoint or reg_target value or disassemble? [n | c | x/N | b | t | d] ");
+			scanf("%s", buf);
+			if (buf[0] == 'n') {
+				break;
+			} else if (buf[0] == 'c') {
+				step = 0;
+				break;
+			} else if (buf[0] == 'x') {
+				bx_address addr;
+				printf("Address to examine: ");
+				scanf("%x", &addr);
+				bx_dbg_examine_command(buf+1, addr);
+			} else if (buf[0] == 'b') {
+				bx_address addr;
+				printf("Address to break: ");
+				scanf("%x", &addr);
+				int i;
+				for (i = 0; i < 4; i++) {
+					if (yifan_breakpoint[i] == 0) {
+						yifan_breakpoint[i] = addr;
+						break;
+					}
+				}
+				if (i == 4) {
+					printf("Only 4 breakpoints supported\n");
+				}
+				printf("Breakpoints:\n");
+				for (i = 0; i < 4; i++) {
+					printf("- %i: %08x\n", i, yifan_breakpoint[i]);
+				}
+			} else if (buf[0] == 't') {
+				printf("Reg target value to watch (in hex): ");
+				scanf("%x", &yifan_reg_target);
+				printf("Reg target value: %x\n", yifan_reg_target);
+				
+				printf("Final int to watch (in decimal): ");
+				scanf("%i", &yifan_final_int);
+				printf("Reg target value: %x\n", yifan_final_int);
+			} else if (buf[0] == 'd') {
+				bx_address from;
+				bx_address to;
+				printf("Enter the FROM address to disassemble: ");
+				scanf("%x", &from);
+				printf("Enter the TO address to disassemble: ");
+				scanf("%x", &to);
+
+				bx_dbg_disassemble_command(NULL, from, to);
+			}
+		}
+#endif
+
+#if 0
+		while (1) {
+			char buf[16];
+			printf("Continue or disassemble? [c | d] ");
+			scanf("%s", buf);
+			if (buf[0] == 'c') {
+				break;
+			} else {
+				bx_address from;
+				bx_address to;
+				printf("Enter the FROM address to disassemble: ");
+				scanf("%x", &from);
+				printf("Enter the TO address to disassemble: ");
+				scanf("%x", &to);
+
+				bx_dbg_disassemble_command(NULL, from, to);
+			}
+		}
+#endif
+
+	  }
+#endif
+
+#if 0
+	  if (yifan_trace) {
+		debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 0);
+		BX_INFO(("### After RIP %08x:", BX_CPU_THIS_PTR prev_rip));
+		BX_INFO(("| EAX=%08x  EBX=%08x  ECX=%08x  EDX=%08x", (unsigned) EAX, (unsigned) EBX, (unsigned) ECX, (unsigned) EDX));
+		BX_INFO(("| ESP=%08x  EBP=%08x  ESI=%08x  EDI=%08x", (unsigned) ESP, (unsigned) EBP, (unsigned) ESI, (unsigned) EDI));
+	  }
+#endif
+
+#if 1
+	  if (yifan_trace) {
+		  if (!yifan_break) {
+			  for (int i = 0; i < 4; i++) {
+				if (EIP == yifan_breakpoint[i]) {
+					printf("\n=====> hit breakpoint: %08x\n", EIP);
+					yifan_break = 1;
+					break;
+				}
+			  }
+		  }
+
+		  if (yifan_break) {
+			printf("Previous instruction at %08x:\n", BX_CPU_THIS_PTR prev_rip);
+			debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 1);
+			printf("### After RIP %08x:\n", BX_CPU_THIS_PTR prev_rip);
+			printf("| EAX=%08x  EBX=%08x  ECX=%08x  EDX=%08x\n", (unsigned) EAX, (unsigned) EBX, (unsigned) ECX, (unsigned) EDX);
+			printf("| ESP=%08x  EBP=%08x  ESI=%08x  EDI=%08x\n\n", (unsigned) ESP, (unsigned) EBP, (unsigned) ESI, (unsigned) EDI);
+
+			bx_address addr;
+
+			while (1) {
+				char buf[16];
+				printf("Next or continue or examine or set|del breakpoint or watchpoint? [n | c | x/N | b | d | v | w] ");
+				scanf("%s", buf);
+				if (buf[0] == 'n') {
+					break;
+				} else if (buf[0] == 'c') {
+					yifan_break = 0;
+					break;
+				} else if (buf[0] == 'x') {
+					printf("Address to examine: ");
+					scanf("%x", &addr);
+					bx_dbg_examine_command(buf+1, addr);
+				} else if (buf[0] == 'b') {
+					printf("Address to break: ");
+					scanf("%x", &addr);
+					int i;
+					for (i = 0; i < 4; i++) {
+						if (yifan_breakpoint[i] == 0) {
+							yifan_breakpoint[i] = addr;
+							break;
+						}
+					}
+					if (i == 4) {
+						printf("Only 4 breakpoints supported\n");
+					}
+					printf("Breakpoints:\n");
+					for (i = 0; i < 4; i++) {
+						printf("- %i: %08x\n", i, yifan_breakpoint[i]);
+					}
+				} else if (buf[0] == 'v') {
+					printf("Address to watch byte: ");
+					scanf("%x", &addr);
+					int i;
+					for (i = 0; i < 4; i++) {
+						if (yifan_watch_byte[i] == 0) {
+							yifan_watch_byte[i] = addr;
+							break;
+						}
+					}
+					if (i == 4) {
+						printf("Only 4 byte watchpoints supported\n");
+					}
+					printf("Byte watchpoints:\n");
+					for (i = 0; i < 4; i++) {
+						printf("- %i: %08x\n", i, yifan_watch_byte[i]);
+					}
+				} else if (buf[0] == 'w') {
+					printf("Address to watch dword: ");
+					scanf("%x", &addr);
+					int i;
+					for (i = 0; i < 4; i++) {
+						if (yifan_watch_dword[i] == 0) {
+							yifan_watch_dword[i] = addr;
+							break;
+						}
+					}
+					if (i == 4) {
+						printf("Only 4 dword watchpoints supported\n");
+					}
+					printf("Dword watchpoints:\n");
+					for (i = 0; i < 4; i++) {
+						printf("- %i: %08x\n", i, yifan_watch_dword[i]);
+					}
+				} else if (buf[0] == 'd') {
+					printf("Delete breakpoint/watchpoint at: ");
+					scanf("%x", &addr);
+					int i;
+					for (i = 0; i < 4; i++) {
+						if (yifan_breakpoint[i] == addr) {
+							yifan_breakpoint[i] = 0;
+							break;
+						}
+					}
+					for (i = 0; i < 4; i++) {
+						if (yifan_watch_byte[i] == addr) {
+							yifan_watch_byte[i] = 0;
+							break;
+						}
+					}
+					for (i = 0; i < 4; i++) {
+						if (yifan_watch_dword[i] == addr) {
+							yifan_watch_dword[i] = 0;
+							break;
+						}
+					}
+					printf("Breakpoints:\n");
+					for (i = 0; i < 4; i++) {
+						printf("- %i: %08x\n", i, yifan_breakpoint[i]);
+					}
+					printf("Byte watchpoints:\n");
+					for (i = 0; i < 4; i++) {
+						printf("- %i: %08x\n", i, yifan_watch_byte[i]);
+					}
+					printf("Dword watchpoints:\n");
+					for (i = 0; i < 4; i++) {
+						printf("- %i: %08x\n", i, yifan_watch_dword[i]);
+					}
+				}
+			}
+		  }
+	  }
+#endif
+
       BX_CPU_THIS_PTR prev_rip = RIP; // commit new RIP
       BX_INSTR_AFTER_EXECUTION(BX_CPU_ID, i);
       BX_CPU_THIS_PTR icount++;

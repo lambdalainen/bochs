@@ -35,7 +35,7 @@ BX_INSF_TYPE BX_CPP_AttrRegparmN(1) BX_CPU_C::BxError(bxInstruction_c *i)
 
 #if BX_DISASM && BX_DEBUGGER == 0 // with debugger it easy to see the #UD
     if (LOG_THIS getonoff(LOGLEV_DEBUG))
-      debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip);
+      debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 0);
 #endif
   }
   else {

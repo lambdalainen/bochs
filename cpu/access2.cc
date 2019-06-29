@@ -26,9 +26,84 @@
 #include "cpu.h"
 #define LOG_THIS BX_CPU_THIS_PTR
 
+extern bx_address yifan_watch_byte[4];
+extern bx_address yifan_watch_dword[4];
+extern bx_bool    yifan_trace;
+
+const char *reagent_code = "00419713568259015526";
+const char *reagent_date = "20200116";
+const char *code_p = reagent_code;
+const char *date_p = reagent_date;
+
   void BX_CPP_AttrRegparmN(3)
 BX_CPU_C::write_linear_byte(unsigned s, bx_address laddr, Bit8u data)
 {
+#if 0
+	if (yifan_watch) {
+		if (laddr >= yifan_watch && laddr < (yifan_watch + 8)) {
+			printf(">>> writing to %x: s %x data %x\n", laddr, s, data);
+
+			debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 1);
+			printf("### After RIP %08x:\n", BX_CPU_THIS_PTR prev_rip);
+			printf("| EAX=%08x  EBX=%08x  ECX=%08x  EDX=%08x\n", (unsigned) EAX, (unsigned) EBX, (unsigned) ECX, (unsigned) EDX);
+			printf("| ESP=%08x  EBP=%08x  ESI=%08x  EDI=%08x\n", (unsigned) ESP, (unsigned) EBP, (unsigned) ESI, (unsigned) EDI);
+		}
+	}
+#endif
+
+#if 1
+	if (yifan_trace) {
+		for (int i = 0; i < 4; i++) {
+			if (yifan_watch_byte[i] == laddr) {
+				printf(">>> writing byte to %x: s %x data %x\n", laddr, s, data);
+
+				debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 1);
+				printf("### After RIP %08x:\n", BX_CPU_THIS_PTR prev_rip);
+				printf("| EAX=%08x  EBX=%08x  ECX=%08x  EDX=%08x\n", (unsigned) EAX, (unsigned) EBX, (unsigned) ECX, (unsigned) EDX);
+				printf("| ESP=%08x  EBP=%08x  ESI=%08x  EDI=%08x\n", (unsigned) ESP, (unsigned) EBP, (unsigned) ESI, (unsigned) EDI);
+				break;
+			}
+		}
+	}
+#endif
+
+#if 1
+	if (data == *date_p) {
+		if (date_p == reagent_date + 7) {
+			printf(">>>>>> Finished writing reagent_date -> prev_rip: %08x\n", BX_CPU_THIS_PTR prev_rip);
+			debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 1);
+			BX_INFO((">>>>>> tracing stops\n"));
+			yifan_trace = 0;
+
+			date_p = reagent_date;
+		} else {
+			date_p++;
+		}
+	} else {
+		date_p = reagent_date;
+	}
+#endif
+
+#if 1
+	if (yifan_trace) {
+		if ((laddr & 0xFF0000FF) == 0x860000D8) {
+				printf(">>> writing byte to %x: s %x data %x\n", laddr, s, data);
+
+				debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 1);
+				printf("### After RIP %08x:\n", BX_CPU_THIS_PTR prev_rip);
+				printf("| EAX=%08x  EBX=%08x  ECX=%08x  EDX=%08x\n", (unsigned) EAX, (unsigned) EBX, (unsigned) ECX, (unsigned) EDX);
+				printf("| ESP=%08x  EBP=%08x  ESI=%08x  EDI=%08x\n", (unsigned) ESP, (unsigned) EBP, (unsigned) ESI, (unsigned) EDI);
+		}
+	}
+#endif
+
+#if 0
+	if (yifan_trace && (data == 0x30 || data == 0x31 || data == 0x32 || data == 0x36)) {
+		printf(">>>>>> writing byte: %x\n", data);
+		BX_INFO((">>>>>> writing byte: %x\n", data));
+		debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 0);
+	}
+#endif
   bx_address lpf = LPFOf(laddr);
   bx_TLB_entry *tlbEntry = BX_TLB_ENTRY_OF(laddr, 0);
   if (tlbEntry->lpf == lpf) {
@@ -53,6 +128,19 @@ BX_CPU_C::write_linear_byte(unsigned s, bx_address laddr, Bit8u data)
   void BX_CPP_AttrRegparmN(3)
 BX_CPU_C::write_linear_word(unsigned s, bx_address laddr, Bit16u data)
 {
+#if 1
+	if (yifan_trace) {
+		if ((laddr & 0xFF0000FF) == 0x860000D8) {
+				printf(">>> writing word to %x: s %x data %x\n", laddr, s, data);
+
+				debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 1);
+				printf("### After RIP %08x:\n", BX_CPU_THIS_PTR prev_rip);
+				printf("| EAX=%08x  EBX=%08x  ECX=%08x  EDX=%08x\n", (unsigned) EAX, (unsigned) EBX, (unsigned) ECX, (unsigned) EDX);
+				printf("| ESP=%08x  EBP=%08x  ESI=%08x  EDI=%08x\n", (unsigned) ESP, (unsigned) EBP, (unsigned) ESI, (unsigned) EDI);
+		}
+	}
+#endif
+
   bx_TLB_entry *tlbEntry = BX_TLB_ENTRY_OF(laddr, 1);
 #if BX_SUPPORT_ALIGNMENT_CHECK && BX_CPU_LEVEL >= 4
   bx_address lpf = AlignedAccessLPFOf(laddr, (1 & BX_CPU_THIS_PTR alignment_check_mask));
@@ -81,6 +169,36 @@ BX_CPU_C::write_linear_word(unsigned s, bx_address laddr, Bit16u data)
   void BX_CPP_AttrRegparmN(3)
 BX_CPU_C::write_linear_dword(unsigned s, bx_address laddr, Bit32u data)
 {
+	
+#if 1
+	if (yifan_trace) {
+		for (int i = 0; i < 4; i++) {
+			if (yifan_watch_dword[i] == laddr) {
+				printf(">>> writing dword to %x: s %x data %x\n", laddr, s, data);
+
+				debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 1);
+				printf("### After RIP %08x:\n", BX_CPU_THIS_PTR prev_rip);
+				printf("| EAX=%08x  EBX=%08x  ECX=%08x  EDX=%08x\n", (unsigned) EAX, (unsigned) EBX, (unsigned) ECX, (unsigned) EDX);
+				printf("| ESP=%08x  EBP=%08x  ESI=%08x  EDI=%08x\n", (unsigned) ESP, (unsigned) EBP, (unsigned) ESI, (unsigned) EDI);
+				break;
+			}
+		}
+	}
+#endif
+
+#if 1
+	if (yifan_trace) {
+		if ((laddr & 0xFF0000FF) == 0x860000D8) {
+				printf(">>> writing dword to %x: s %x data %x\n", laddr, s, data);
+
+				debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 1);
+				printf("### After RIP %08x:\n", BX_CPU_THIS_PTR prev_rip);
+				printf("| EAX=%08x  EBX=%08x  ECX=%08x  EDX=%08x\n", (unsigned) EAX, (unsigned) EBX, (unsigned) ECX, (unsigned) EDX);
+				printf("| ESP=%08x  EBP=%08x  ESI=%08x  EDI=%08x\n", (unsigned) ESP, (unsigned) EBP, (unsigned) ESI, (unsigned) EDI);
+		}
+	}
+#endif
+
   bx_TLB_entry *tlbEntry = BX_TLB_ENTRY_OF(laddr, 3);
 #if BX_SUPPORT_ALIGNMENT_CHECK && BX_CPU_LEVEL >= 4
   bx_address lpf = AlignedAccessLPFOf(laddr, (3 & BX_CPU_THIS_PTR alignment_check_mask));
@@ -357,6 +475,24 @@ BX_CPU_C::read_linear_byte(unsigned s, bx_address laddr)
       Bit8u *hostAddr = (Bit8u*) (hostPageAddr | pageOffset);
       data = *hostAddr;
       BX_NOTIFY_LIN_MEMORY_ACCESS(laddr, (tlbEntry->ppf | pageOffset), 1, tlbEntry->get_memtype(), BX_READ, (Bit8u*) &data);
+#if 1
+	if (data == *code_p) {
+		if (code_p == reagent_code + 19) {
+			printf(">>>>>> a) Finished reading reagent_code -> prev_rip: %08x\n", BX_CPU_THIS_PTR prev_rip);
+			debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 1);
+			//if (BX_CPU_THIS_PTR prev_rip == 0x1000da50) {
+				BX_INFO((">>>>>> tracing starts\n"));
+				yifan_trace = 1;
+			//}
+
+			code_p = reagent_code;
+		} else {
+			code_p++;
+		}
+	} else {
+		code_p = reagent_code;
+	}
+#endif
       return data;
     }
   }
@@ -364,6 +500,24 @@ BX_CPU_C::read_linear_byte(unsigned s, bx_address laddr)
   if (access_read_linear(laddr, 1, CPL, BX_READ, 0x0, (void *) &data) < 0)
     exception(int_number(s), 0);
 
+#if 1
+	if (data == *code_p) {
+		if (code_p == reagent_code + 19) {
+			printf(">>>>>> b) Finished reading reagent_code -> prev_rip: %08x\n", BX_CPU_THIS_PTR prev_rip);
+			debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 1);
+			if (BX_CPU_THIS_PTR prev_rip == 0x1000da50) {
+				BX_INFO((">>>>>> tracing starts\n"));
+				yifan_trace = 1;
+			}
+
+			code_p = reagent_code;
+		} else {
+			code_p++;
+		}
+	} else {
+		code_p = reagent_code;
+	}
+#endif
   return data;
 }
 
