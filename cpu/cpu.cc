@@ -28,19 +28,33 @@
 
 #include "disasm/disasm.h"
 
+// Features we support:
+//
+// 1. 4 regular breakpoints: break at an address
+// 1. 4 regular watchpoints for byte, word, and dword: print info when a value is
+//    written to a memory address. This works under tracing mode. Tracing starts
+//    when search_string_read is read from memory, and stops when
+//    search_string_write is written to memory.
+// 3. Break when any register contains a target value.
+
 Bit64u rip_trace[10000];
 long   rip_idx;
-int    skip = 0;
-int    step = 0;
-int    instr_count = 0;
 
-bx_address yifan_breakpoint[4];
-bx_address yifan_watch_byte[4];
-bx_address yifan_watch_dword[4];
-bx_bool    yifan_trace = 0;
-bx_bool    yifan_break = 0;
-Bit32u     yifan_reg_target = 0xdeadbeee;
-Bit32u     yifan_final_int = 20200116;
+bx_address breakpoint[4];
+
+bx_address watch_byte[4];
+bx_address watch_word[4];
+bx_address watch_dword[4];
+bx_bool    is_tracing = 0;
+
+char search_string_read[1024];
+int  search_string_read_length;
+char search_string_write[1024];
+int  search_string_write_length;
+
+Bit32u     reg_target   = 0;
+bx_bool    watch_reg    = 0;
+bx_bool    should_break = 0;
 
 static disassembler bx_disassemble;
 static Bit8u        bx_disasm_ibuf[32];
@@ -102,13 +116,13 @@ void bx_dbg_disassemble_command(const char *format, Bit64u from, Bit64u to)
 
   unsigned dis_size = 0; //bx_debugger.disassemble_size;
   if (dis_size == 0) {
-    dis_size = 16; 		// until otherwise proven
+    dis_size = 16;     // until otherwise proven
     if (BX_CPU(dbg_cpu)->sregs[BX_SEG_REG_CS].cache.u.segment.d_b)
       dis_size = 32;
     if (BX_CPU(dbg_cpu)->get_cpu_mode() == BX_MODE_LONG_64)
       dis_size = 64;
   }
-  
+
   FILE *fp = fopen("disassembled.txt", "a");
   fprintf(fp, ">>>>>>>>>> Starting new disassembly\n");
 
@@ -129,9 +143,9 @@ void bx_dbg_disassemble_command(const char *format, Bit64u from, Bit64u to)
 
     from += ilen;
   } while ((from < to) && numlines > 0);
-  
+
   fprintf(fp, "<<<<<<<<<<  Disassembly ends\n");
-  
+
   fclose(fp);
 }
 
@@ -153,8 +167,8 @@ void bx_dbg_examine_command(const char *format, bx_address addr)
   ch = *format;
 
   while (ch>='0' && ch<='9') {
-	repeat_count = 10*repeat_count + (ch-'0');
-	format++;
+  repeat_count = 10*repeat_count + (ch-'0');
+  format++;
     ch = *format;
   }
 
@@ -170,10 +184,10 @@ void bx_dbg_examine_command(const char *format, bx_address addr)
     }
 
     if (! bx_dbg_read_linear(dbg_cpu, addr, data_size, databuf))
-		return;
+    return;
 
-	data8 = databuf[0];
-	printf("\t0x%02x", (unsigned) data8);
+  data8 = databuf[0];
+  printf("\t0x%02x", (unsigned) data8);
 
     addr += data_size;
     columns++;
@@ -254,329 +268,265 @@ void BX_CPU_C::cpu_loop(void)
         debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 0);
 #endif
 
-#if 0
-	  rip_trace[rip_idx++] = BX_CPU_THIS_PTR prev_rip;
-	  if (rip_idx == 10000)
-		  rip_idx = 0;
-#endif
-
       // want to allow changing of the instruction inside instrumentation callback
       BX_INSTR_BEFORE_EXECUTION(BX_CPU_ID, i);
       RIP += i->ilen();
       BX_CPU_CALL_METHOD(i->execute1, (i)); // might iterate repeat instruction
-	  
-#if 0
-	  if (EAX == 0x1343AB4 ||
-	  	  EBX == 0x1343AB4 ||
-	  	  ECX == 0x1343AB4 ||
-	  	  EDX == 0x1343AB4) {
-		if (skip == 1) {
-			printf("### skipping...\n");
-		} else {
-			  // We know these are not used
-			  //ESI == 0x1343B23 ||
-			  //EDI == 0x1343B23) {
-			debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 1);
-			printf("### After RIP %08x:\n", BX_CPU_THIS_PTR prev_rip);
-			printf("| EAX=%08x  EBX=%08x  ECX=%08x  EDX=%08x\n", (unsigned) EAX, (unsigned) EBX, (unsigned) ECX, (unsigned) EDX);
-			printf("| ESP=%08x  EBP=%08x  ESI=%08x  EDI=%08x\n", (unsigned) ESP, (unsigned) EBP, (unsigned) ESI, (unsigned) EDI);
-
-			char buf[8];
-			printf("Disassemble rip_trace? [y/n/s(kip)] ");
-			scanf("%s", buf);
-			if (buf[0] == 'y') {
-				printf("--- rip_idx: %li\n", rip_idx);
-				for (int idx = rip_idx; idx < 10000; idx++) {
-					bx_dbg_disassemble_command(NULL, rip_trace[idx], rip_trace[idx]);
-				}
-				for (int idx = 0; idx < rip_idx; idx++) {
-					bx_dbg_disassemble_command(NULL, rip_trace[idx], rip_trace[idx]);
-				}
-			} else if (buf[0] == 's') {
-				skip = 1;
-			}
-		}
-	  } else {
-		  skip = 0;
-	  }
-#endif
-
-#if 1
-	  if (EAX == yifan_reg_target ||
-	  	  EBX == yifan_reg_target ||
-	  	  ECX == yifan_reg_target ||
-	  	  EDX == yifan_reg_target ||
-		  ESI == yifan_reg_target ||
-		  EDI == yifan_reg_target) {
-		debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 1);
-		printf("### Got %x: after RIP %08x:\n", yifan_reg_target, BX_CPU_THIS_PTR prev_rip);
-		printf("| EAX=%08x  EBX=%08x  ECX=%08x  EDX=%08x\n", (unsigned) EAX, (unsigned) EBX, (unsigned) ECX, (unsigned) EDX);
-		printf("| ESP=%08x  EBP=%08x  ESI=%08x  EDI=%08x\n", (unsigned) ESP, (unsigned) EBP, (unsigned) ESI, (unsigned) EDI);
-	  }
-#endif
 
 #if 0
-	  if (BX_CPU_THIS_PTR prev_rip == 0x10010cca)
-		  step = 1;
-	  if (step) {
-		debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 1);
-		printf("### After RIP %08x:\n", BX_CPU_THIS_PTR prev_rip);
-		printf("| EAX=%08x  EBX=%08x  ECX=%08x  EDX=%08x\n", (unsigned) EAX, (unsigned) EBX, (unsigned) ECX, (unsigned) EDX);
-		printf("| ESP=%08x  EBP=%08x  ESI=%08x  EDI=%08x\n", (unsigned) ESP, (unsigned) EBP, (unsigned) ESI, (unsigned) EDI);
-		
-		if (EAX == 0x1343AB4 ||
-	  	    EBX == 0x1343AB4 ||
-	  	    ECX == 0x1343AB4 ||
-	  	    EDX == 0x1343AB4) {
-		  printf(">>>>>> Found target value\n");
-		}
+      rip_trace[rip_idx++] = BX_CPU_THIS_PTR prev_rip;
+      if (rip_idx == 10000)
+          rip_idx = 0;
 
-		char buf[8];
-		printf("Next or continue? [n/c] ");
-		scanf("%s", buf);
-		if (buf[0] == 'c')
-			step = 0;
-	  }
+      char buf[8];
+      printf("Disassemble rip_trace? [y/n/s(kip)] ");
+      scanf("%s", buf);
+      if (buf[0] == 'y') {
+        printf("--- rip_idx: %li\n", rip_idx);
+        for (int idx = rip_idx; idx < 10000; idx++) {
+          bx_dbg_disassemble_command(NULL, rip_trace[idx], rip_trace[idx]);
+        }
+        for (int idx = 0; idx < rip_idx; idx++) {
+          bx_dbg_disassemble_command(NULL, rip_trace[idx], rip_trace[idx]);
+        }
+      }
 #endif
 
-#if 0
-	  if (BX_CPU_THIS_PTR prev_rip == 0x10010cca) {
-		printf("### Start tracing 256 instructions\n");
-		instr_count = 256;
-	  }
-	  if (instr_count) {
-		instr_count--;
-		debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 0);
-		BX_INFO(("### After RIP %08x:", BX_CPU_THIS_PTR prev_rip));
-		BX_INFO(("| EAX=%08x  EBX=%08x  ECX=%08x  EDX=%08x", (unsigned) EAX, (unsigned) EBX, (unsigned) ECX, (unsigned) EDX));
-		BX_INFO(("| ESP=%08x  EBP=%08x  ESI=%08x  EDI=%08x", (unsigned) ESP, (unsigned) EBP, (unsigned) ESI, (unsigned) EDI));
-		
-		if (EAX == 0x1343AB4 ||
-	  	    EBX == 0x1343AB4 ||
-	  	    ECX == 0x1343AB4 ||
-	  	    EDX == 0x1343AB4) {
-		  BX_INFO((">>>>>> Found target value"));
-		}
-	  }
-#endif
+      // tracing is only triggered by search_string_read and search_string_write
+      if (is_tracing) {
+          debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 0);
+          BX_INFO(("### After RIP %08x:", BX_CPU_THIS_PTR prev_rip));
+          BX_INFO(("| EAX=%08x  EBX=%08x  ECX=%08x  EDX=%08x", (unsigned) EAX, (unsigned) EBX, (unsigned) ECX, (unsigned) EDX));
+          BX_INFO(("| ESP=%08x  EBP=%08x  ESI=%08x  EDI=%08x", (unsigned) ESP, (unsigned) EBP, (unsigned) ESI, (unsigned) EDI));
+      }
 
-#if 1
-	  if ((BX_CPU_THIS_PTR prev_rip == 0x10010e5f && EBX == yifan_final_int) || step) {
-		debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 1);
-		printf("### After RIP %08x:\n", BX_CPU_THIS_PTR prev_rip);
-		printf("| EAX=%08x  EBX=%08x  ECX=%08x  EDX=%08x\n", (unsigned) EAX, (unsigned) EBX, (unsigned) ECX, (unsigned) EDX);
-		printf("| ESP=%08x  EBP=%08x  ESI=%08x  EDI=%08x\n", (unsigned) ESP, (unsigned) EBP, (unsigned) ESI, (unsigned) EDI);
-		
-#if 1
-		while (1) {
-			char buf[16];
-			printf("Next or continue or examine or set breakpoint or reg_target value or disassemble? [n | c | x/N | b | t | d] ");
-			scanf("%s", buf);
-			if (buf[0] == 'n') {
-				break;
-			} else if (buf[0] == 'c') {
-				step = 0;
-				break;
-			} else if (buf[0] == 'x') {
-				bx_address addr;
-				printf("Address to examine: ");
-				scanf("%x", &addr);
-				bx_dbg_examine_command(buf+1, addr);
-			} else if (buf[0] == 'b') {
-				bx_address addr;
-				printf("Address to break: ");
-				scanf("%x", &addr);
-				int i;
-				for (i = 0; i < 4; i++) {
-					if (yifan_breakpoint[i] == 0) {
-						yifan_breakpoint[i] = addr;
-						break;
-					}
-				}
-				if (i == 4) {
-					printf("Only 4 breakpoints supported\n");
-				}
-				printf("Breakpoints:\n");
-				for (i = 0; i < 4; i++) {
-					printf("- %i: %08x\n", i, yifan_breakpoint[i]);
-				}
-			} else if (buf[0] == 't') {
-				printf("Reg target value to watch (in hex): ");
-				scanf("%x", &yifan_reg_target);
-				printf("Reg target value: %x\n", yifan_reg_target);
-				
-				printf("Final int to watch (in decimal): ");
-				scanf("%i", &yifan_final_int);
-				printf("Reg target value: %x\n", yifan_final_int);
-			} else if (buf[0] == 'd') {
-				bx_address from;
-				bx_address to;
-				printf("Enter the FROM address to disassemble: ");
-				scanf("%x", &from);
-				printf("Enter the TO address to disassemble: ");
-				scanf("%x", &to);
+      if (watch_reg) {
+          if (EAX == reg_target ||
+              EBX == reg_target ||
+              ECX == reg_target ||
+              EDX == reg_target ||
+              ESI == reg_target ||
+              EDI == reg_target)
+          {
+              debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 1);
+              printf("### Got %x: after RIP %08x:\n", reg_target, BX_CPU_THIS_PTR prev_rip);
+              printf("| EAX=%08x  EBX=%08x  ECX=%08x  EDX=%08x\n", (unsigned) EAX, (unsigned) EBX, (unsigned) ECX, (unsigned) EDX);
+              printf("| ESP=%08x  EBP=%08x  ESI=%08x  EDI=%08x\n", (unsigned) ESP, (unsigned) EBP, (unsigned) ESI, (unsigned) EDI);
+          }
+      }
 
-				bx_dbg_disassemble_command(NULL, from, to);
-			}
-		}
-#endif
+      if (!should_break) {
+          for (int i = 0; i < 4; i++) {
+              if (EIP == breakpoint[i]) {
+                  printf("\n=====> hit breakpoint: %08x\n", EIP);
+                  should_break = 1;
+                  break;
+              }
+          }
+      } else {
+          printf("Previous instruction at %08x:\n", BX_CPU_THIS_PTR prev_rip);
+          debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 1);
+          printf("### After RIP %08x:\n", BX_CPU_THIS_PTR prev_rip);
+          printf("| EAX=%08x  EBX=%08x  ECX=%08x  EDX=%08x\n", (unsigned) EAX, (unsigned) EBX, (unsigned) ECX, (unsigned) EDX);
+          printf("| ESP=%08x  EBP=%08x  ESI=%08x  EDI=%08x\n\n", (unsigned) ESP, (unsigned) EBP, (unsigned) ESI, (unsigned) EDI);
 
-#if 0
-		while (1) {
-			char buf[16];
-			printf("Continue or disassemble? [c | d] ");
-			scanf("%s", buf);
-			if (buf[0] == 'c') {
-				break;
-			} else {
-				bx_address from;
-				bx_address to;
-				printf("Enter the FROM address to disassemble: ");
-				scanf("%x", &from);
-				printf("Enter the TO address to disassemble: ");
-				scanf("%x", &to);
+          bx_address addr;
 
-				bx_dbg_disassemble_command(NULL, from, to);
-			}
-		}
-#endif
+          while (1)
+          {
+              char buf[16];
+              printf("(n)ext | (c)ont | (d)isasm | e(x/N)amine | (b)p | reg_(t)arget | (rw)_str | (1|2|4)watchpoint | (D)el: " );
+              scanf("%s", buf);
+              if (buf[0] == 'n')
+              {
+                  break;
+              }
+              else if (buf[0] == 'c')
+              {
+                  should_break = 0;
+                  break;
+              }
+              else if (buf[0] == 'd')
+              {
+                  bx_address from;
+                  bx_address to;
+                  printf("Enter the FROM address to disassemble: ");
+                  scanf("%x", &from);
+                  printf("Enter the TO address to disassemble: ");
+                  scanf("%x", &to);
 
-	  }
-#endif
-
-#if 0
-	  if (yifan_trace) {
-		debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 0);
-		BX_INFO(("### After RIP %08x:", BX_CPU_THIS_PTR prev_rip));
-		BX_INFO(("| EAX=%08x  EBX=%08x  ECX=%08x  EDX=%08x", (unsigned) EAX, (unsigned) EBX, (unsigned) ECX, (unsigned) EDX));
-		BX_INFO(("| ESP=%08x  EBP=%08x  ESI=%08x  EDI=%08x", (unsigned) ESP, (unsigned) EBP, (unsigned) ESI, (unsigned) EDI));
-	  }
-#endif
-
-#if 1
-	  if (yifan_trace) {
-		  if (!yifan_break) {
-			  for (int i = 0; i < 4; i++) {
-				if (EIP == yifan_breakpoint[i]) {
-					printf("\n=====> hit breakpoint: %08x\n", EIP);
-					yifan_break = 1;
-					break;
-				}
-			  }
-		  }
-
-		  if (yifan_break) {
-			printf("Previous instruction at %08x:\n", BX_CPU_THIS_PTR prev_rip);
-			debug_disasm_instruction(BX_CPU_THIS_PTR prev_rip, 1);
-			printf("### After RIP %08x:\n", BX_CPU_THIS_PTR prev_rip);
-			printf("| EAX=%08x  EBX=%08x  ECX=%08x  EDX=%08x\n", (unsigned) EAX, (unsigned) EBX, (unsigned) ECX, (unsigned) EDX);
-			printf("| ESP=%08x  EBP=%08x  ESI=%08x  EDI=%08x\n\n", (unsigned) ESP, (unsigned) EBP, (unsigned) ESI, (unsigned) EDI);
-
-			bx_address addr;
-
-			while (1) {
-				char buf[16];
-				printf("Next or continue or examine or set|del breakpoint or watchpoint? [n | c | x/N | b | d | v | w] ");
-				scanf("%s", buf);
-				if (buf[0] == 'n') {
-					break;
-				} else if (buf[0] == 'c') {
-					yifan_break = 0;
-					break;
-				} else if (buf[0] == 'x') {
-					printf("Address to examine: ");
-					scanf("%x", &addr);
-					bx_dbg_examine_command(buf+1, addr);
-				} else if (buf[0] == 'b') {
-					printf("Address to break: ");
-					scanf("%x", &addr);
-					int i;
-					for (i = 0; i < 4; i++) {
-						if (yifan_breakpoint[i] == 0) {
-							yifan_breakpoint[i] = addr;
-							break;
-						}
-					}
-					if (i == 4) {
-						printf("Only 4 breakpoints supported\n");
-					}
-					printf("Breakpoints:\n");
-					for (i = 0; i < 4; i++) {
-						printf("- %i: %08x\n", i, yifan_breakpoint[i]);
-					}
-				} else if (buf[0] == 'v') {
-					printf("Address to watch byte: ");
-					scanf("%x", &addr);
-					int i;
-					for (i = 0; i < 4; i++) {
-						if (yifan_watch_byte[i] == 0) {
-							yifan_watch_byte[i] = addr;
-							break;
-						}
-					}
-					if (i == 4) {
-						printf("Only 4 byte watchpoints supported\n");
-					}
-					printf("Byte watchpoints:\n");
-					for (i = 0; i < 4; i++) {
-						printf("- %i: %08x\n", i, yifan_watch_byte[i]);
-					}
-				} else if (buf[0] == 'w') {
-					printf("Address to watch dword: ");
-					scanf("%x", &addr);
-					int i;
-					for (i = 0; i < 4; i++) {
-						if (yifan_watch_dword[i] == 0) {
-							yifan_watch_dword[i] = addr;
-							break;
-						}
-					}
-					if (i == 4) {
-						printf("Only 4 dword watchpoints supported\n");
-					}
-					printf("Dword watchpoints:\n");
-					for (i = 0; i < 4; i++) {
-						printf("- %i: %08x\n", i, yifan_watch_dword[i]);
-					}
-				} else if (buf[0] == 'd') {
-					printf("Delete breakpoint/watchpoint at: ");
-					scanf("%x", &addr);
-					int i;
-					for (i = 0; i < 4; i++) {
-						if (yifan_breakpoint[i] == addr) {
-							yifan_breakpoint[i] = 0;
-							break;
-						}
-					}
-					for (i = 0; i < 4; i++) {
-						if (yifan_watch_byte[i] == addr) {
-							yifan_watch_byte[i] = 0;
-							break;
-						}
-					}
-					for (i = 0; i < 4; i++) {
-						if (yifan_watch_dword[i] == addr) {
-							yifan_watch_dword[i] = 0;
-							break;
-						}
-					}
-					printf("Breakpoints:\n");
-					for (i = 0; i < 4; i++) {
-						printf("- %i: %08x\n", i, yifan_breakpoint[i]);
-					}
-					printf("Byte watchpoints:\n");
-					for (i = 0; i < 4; i++) {
-						printf("- %i: %08x\n", i, yifan_watch_byte[i]);
-					}
-					printf("Dword watchpoints:\n");
-					for (i = 0; i < 4; i++) {
-						printf("- %i: %08x\n", i, yifan_watch_dword[i]);
-					}
-				}
-			}
-		  }
-	  }
-#endif
+                  bx_dbg_disassemble_command(NULL, from, to);
+                  break;
+              }
+              else if (buf[0] == 'x')
+              {
+                  printf("Address to examine memory content: ");
+                  scanf("%x", &addr);
+                  // '/N' is handled by bx_dbg_examine_command
+                  bx_dbg_examine_command(buf+1, addr);
+              }
+              else if (buf[0] == 'b')
+              {
+                  printf("Address to break: ");
+                  scanf("%x", &addr);
+                  int i;
+                  for (i = 0; i < 4; i++) {
+                      if (breakpoint[i] == 0) {
+                          breakpoint[i] = addr;
+                          break;
+                      }
+                  }
+                  if (i == 4) {
+                      printf("Only 4 breakpoints supported\n");
+                  }
+                  printf("Breakpoints:\n");
+                  for (i = 0; i < 4; i++) {
+                      printf("- %i: %08x\n", i, breakpoint[i]);
+                  }
+              }
+              else if (buf[0] == 't')
+              {
+                  printf("reg_target value to watch (in hex, 0 to disable): ");
+                  scanf("%x", &reg_target);
+                  if (reg_target == 0) {
+                      watch_reg = 0;
+                      printf("reg_target unset\n");
+                  } else {
+                      watch_reg = 1;
+                      printf("reg_target value: %x\n", reg_target);
+                  }
+              }
+              else if (buf[0] == 'r')
+              {
+                  printf("search_string_read (enter to remove): ");
+                  scanf("%s", search_string_read);
+                  search_string_read_length = strlen(search_string_read);
+                  if (search_string_read_length == 0) {
+                      printf("search_string_read unset\n");
+                  } else {
+                      printf("search_string_read (len %i): %s\n",
+                              search_string_read_length,
+                              search_string_read);
+                  }
+              }
+              else if (buf[0] == 'w')
+              {
+                  printf("search_string_write (enter to remove): ");
+                  scanf("%s", search_string_write);
+                  search_string_write_length = strlen(search_string_write);
+                  if (search_string_write_length == 0) {
+                      printf("search_string_write unset\n");
+                  } else {
+                      printf("search_string_write (len %i): %s\n",
+                              search_string_write_length,
+                              search_string_write);
+                  }
+              }
+              else if (buf[0] == '1')
+              {
+                  printf("Address to watch byte: ");
+                  scanf("%x", &addr);
+                  int i;
+                  for (i = 0; i < 4; i++) {
+                      if (watch_byte[i] == 0) {
+                          watch_byte[i] = addr;
+                          break;
+                      }
+                  }
+                  if (i == 4) {
+                      printf("Only 4 byte watchpoints supported\n");
+                  }
+                  printf("Byte watchpoints:\n");
+                  for (i = 0; i < 4; i++) {
+                      printf("- %i: %08x\n", i, watch_byte[i]);
+                  }
+              }
+              else if (buf[0] == '2')
+              {
+                  printf("Address to watch word: ");
+                  scanf("%x", &addr);
+                  int i;
+                  for (i = 0; i < 4; i++) {
+                      if (watch_word[i] == 0) {
+                          watch_word[i] = addr;
+                          break;
+                      }
+                  }
+                  if (i == 4) {
+                      printf("Only 4 word watchpoints supported\n");
+                  }
+                  printf("Word watchpoints:\n");
+                  for (i = 0; i < 4; i++) {
+                      printf("- %i: %08x\n", i, watch_word[i]);
+                  }
+              }
+              else if (buf[0] == '4')
+              {
+                  printf("Address to watch dword: ");
+                  scanf("%x", &addr);
+                  int i;
+                  for (i = 0; i < 4; i++) {
+                      if (watch_dword[i] == 0) {
+                          watch_dword[i] = addr;
+                          break;
+                      }
+                  }
+                  if (i == 4) {
+                      printf("Only 4 dword watchpoints supported\n");
+                  }
+                  printf("Dword watchpoints:\n");
+                  for (i = 0; i < 4; i++) {
+                      printf("- %i: %08x\n", i, watch_dword[i]);
+                  }
+              }
+              else if (buf[0] == 'D')
+              {
+                  printf("Remove breakpoint/watchpoint at: ");
+                  scanf("%x", &addr);
+                  int i;
+                  for (i = 0; i < 4; i++) {
+                      if (breakpoint[i] == addr) {
+                          breakpoint[i] = 0;
+                          break;
+                      }
+                  }
+                  for (i = 0; i < 4; i++) {
+                      if (watch_byte[i] == addr) {
+                          watch_byte[i] = 0;
+                          break;
+                      }
+                  }
+                  for (i = 0; i < 4; i++) {
+                      if (watch_word[i] == addr) {
+                          watch_word[i] = 0;
+                          break;
+                      }
+                  }
+                  for (i = 0; i < 4; i++) {
+                      if (watch_dword[i] == addr) {
+                          watch_dword[i] = 0;
+                          break;
+                      }
+                  }
+                  printf("Breakpoints:\n");
+                  for (i = 0; i < 4; i++) {
+                      printf("- %i: %08x\n", i, breakpoint[i]);
+                  }
+                  printf("Byte watchpoints:\n");
+                  for (i = 0; i < 4; i++) {
+                      printf("- %i: %08x\n", i, watch_byte[i]);
+                  }
+                  printf("Word watchpoints:\n");
+                  for (i = 0; i < 4; i++) {
+                      printf("- %i: %08x\n", i, watch_word[i]);
+                  }
+                  printf("Dword watchpoints:\n");
+                  for (i = 0; i < 4; i++) {
+                      printf("- %i: %08x\n", i, watch_dword[i]);
+                  }
+              }
+          }
+      }
 
       BX_CPU_THIS_PTR prev_rip = RIP; // commit new RIP
       BX_INSTR_AFTER_EXECUTION(BX_CPU_ID, i);
@@ -1075,7 +1025,7 @@ void BX_CPU_C::prefetch(void)
   if ((tlbEntry->lpf == lpf) && (tlbEntry->accessBits & (0x10 << USER_PL)) != 0) {
     BX_CPU_THIS_PTR pAddrFetchPage = tlbEntry->ppf;
     fetchPtr = (Bit8u*) tlbEntry->hostPageAddr;
-  }  
+  }
   else {
     bx_phy_address pAddr = translate_linear(tlbEntry, laddr, USER_PL, BX_EXECUTE);
     BX_CPU_THIS_PTR pAddrFetchPage = PPFOf(pAddr);
@@ -1143,7 +1093,7 @@ bx_bool BX_CPU_C::dbg_instruction_epilog(void)
     return(1); // on a breakpoint
   }
 
-  // see if debugger requesting icount guard 
+  // see if debugger requesting icount guard
   if (bx_guard.guard_for & BX_DBG_GUARD_ICOUNT) {
     if (get_icount() >= BX_CPU_THIS_PTR guard_found.icount_max) {
       return(1);
