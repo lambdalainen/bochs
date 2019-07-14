@@ -41,6 +41,10 @@ Bit64u rip_trace[10000];
 long   rip_idx;
 
 bx_address breakpoint[4];
+bx_bool    should_break = 0;
+
+Bit32u     reg_target = 0;
+bx_bool    reg_target_is_watching = 0;
 
 bx_address watch_byte[4];
 bx_address watch_word[4];
@@ -51,10 +55,6 @@ char search_string_read[1024];
 int  search_string_read_length;
 char search_string_write[1024];
 int  search_string_write_length;
-
-Bit32u     reg_target   = 0;
-bx_bool    watch_reg    = 0;
-bx_bool    should_break = 0;
 
 static disassembler bx_disassemble;
 static Bit8u        bx_disasm_ibuf[32];
@@ -300,7 +300,7 @@ void BX_CPU_C::cpu_loop(void)
           BX_INFO(("| ESP=%08x  EBP=%08x  ESI=%08x  EDI=%08x", (unsigned) ESP, (unsigned) EBP, (unsigned) ESI, (unsigned) EDI));
       }
 
-      if (watch_reg) {
+      if (reg_target_is_watching) {
           if (EAX == reg_target ||
               EBX == reg_target ||
               ECX == reg_target ||
@@ -316,11 +316,13 @@ void BX_CPU_C::cpu_loop(void)
       }
 
       if (!should_break) {
-          for (int i = 0; i < 4; i++) {
-              if (EIP == breakpoint[i]) {
-                  printf("\n=====> hit breakpoint: %08x\n", EIP);
-                  should_break = 1;
-                  break;
+          if (EIP) {
+              for (int i = 0; i < 4; i++) {
+                  if (EIP == breakpoint[i]) {
+                      printf("\n=====> hit breakpoint: %08x\n", EIP);
+                      should_break = 1;
+                      break;
+                  }
               }
           }
       } else {
@@ -389,10 +391,10 @@ void BX_CPU_C::cpu_loop(void)
                   printf("reg_target value to watch (in hex, 0 to disable): ");
                   scanf("%x", &reg_target);
                   if (reg_target == 0) {
-                      watch_reg = 0;
+                      reg_target_is_watching = 0;
                       printf("reg_target unset\n");
                   } else {
-                      watch_reg = 1;
+                      reg_target_is_watching = 1;
                       printf("reg_target value: %x\n", reg_target);
                   }
               }
